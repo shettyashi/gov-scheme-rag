@@ -1,0 +1,86 @@
+name: Eval Suite
+
+# Runs on every push and PR to main - this is the "run_eval.py on every
+# change" requirement from the project's own PRD. A regression in
+# retrieval hit-rate or hallucination rate fails the build, same as a
+# failing test suite would.
+#
+# What this does NOT do: run scripts/ingest.py. Ingestion needs
+# Tesseract/OCR and your actual source PDFs, which aren't in the repo
+# (see .gitignore). CI instead uses the committed data/processed/chunks.jsonl
+# - regenerate and re-commit that file locally whenever your source PDFs
+# change (`python scripts/ingest.py`), and CI will pick up the new chunks
+# on the next push. This keeps CI fast and independent of OCR flakiness,
+# at the cost of CI not catching an ingestion-layer bug directly - that
+# layer is still covered by testing locally before you commit.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: rag
+          POSTGRES_PASSWORD: rag
+          POSTGRES_DB: gov_scheme_rag
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rag -d gov_scheme_rag"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGDATABASE: gov_scheme_rag
+      PGUSER: rag
+      PGPASSWORD: rag
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      PYTHONPATH: .
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Apply database schema
+        run: PGPASSWORD=rag psql -h localhost -U rag -d gov_scheme_rag -f scripts/init.sql
+
+      - name: Check committed chunks exist
+        run: |
+          if [ ! -s data/processed/chunks.jsonl ]; then
+            echo "data/processed/chunks.jsonl is missing or empty."
+            echo "Run 'python scripts/ingest.py' locally against your real PDFs and commit the result."
+            exit 1
+          fi
+          echo "Found $(wc -l < data/processed/chunks.jsonl) chunks."
+
+      - name: Embed and store chunks
+        run: python scripts/embed_and_store.py
+
+      - name: Run eval suite
+        run: python scripts/run_eval.py
+
+      - name: Upload eval results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: eval/results.json

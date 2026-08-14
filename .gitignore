@@ -1,0 +1,27 @@
+# Secrets — never commit these
+.env
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Local data — raw PDFs may be large and aren't meant for the repo.
+# chunks.jsonl is DELIBERATELY NOT ignored below (see the ! line) —
+# it's small plain text, and committing it lets CI run embedding +
+# eval reproducibly without needing OCR/Tesseract in the CI
+# environment at all. Regenerate it locally with scripts/ingest.py
+# whenever your source PDFs change, and commit the updated file.
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+!data/processed/chunks.jsonl
+
+# OS/editor cruft
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
