@@ -19,9 +19,20 @@ conceptual job (LLM-judge scoring of claim support) directly against
 your own Groq client, which is simpler to reason about, debug, and
 explain in an interview. If you want RAGAS specifically later, this
 module is the natural replacement point.
+
+IMPORTANT — non-determinism: temperature=0.0 reduces output variance
+but does NOT guarantee identical responses across separate API calls,
+even for the same prompt. This is normal, documented behavior for
+production LLM inference (batching effects, routing, hardware
+differences between requests) — not a bug in this code. Running the
+eval suite on two different machines (or even twice on the same
+machine) can produce different faithfulness verdicts on borderline
+answers. Report eval numbers with this caveat, and treat a single
+run's hallucination_rate as an estimate, not an exact figure.
 """
 
 from dataclasses import dataclass
+from typing import Literal
 
 from app.generation.llm_client import chat
 from app.generation.prompt import format_chunks_for_prompt
@@ -40,7 +51,8 @@ IS grounded in the source. Only flag a claim as unsupported if it introduces new
 figures, conditions, or specifics that cannot be derived from the retrieved content through \
 plain arithmetic.
 
-Respond with exactly one word on the first line: FAITHFUL or UNFAITHFUL.
+Respond with EXACTLY one word on the first line: FAITHFUL or UNFAITHFUL. No other text, no \
+punctuation, no extra words on that line.
 - FAITHFUL: every factual claim in the answer is directly supported by the retrieved content \
 (basic arithmetic/unit conversions of grounded numbers count as supported).
 - UNFAITHFUL: the answer contains at least one claim (a fact, number, condition, or detail) \
@@ -49,34 +61,63 @@ content — even if it sounds plausible or is generally true.
 
 On the second line, you MUST give a specific reason: name the exact unsupported claim if \
 UNFAITHFUL (quote or closely paraphrase it), or write "all claims supported" if FAITHFUL. \
-Never leave the second line blank — a verdict with no stated reason is not acceptable.
+Never leave the second line blank.
 """
+
+# faithful=True/False are real judged outcomes. faithful=None means the
+# judge failed to produce a parseable, explained verdict after retries —
+# this must NEVER be silently folded into True or False, since that
+# would misrepresent "the judge is malfunctioning" as "the judge found
+# (or didn't find) a hallucination."
+FaithfulnessStatus = Literal["FAITHFUL", "UNFAITHFUL", "INVALID_JUDGE_RESPONSE"]
 
 
 @dataclass
 class FaithfulnessResult:
-    faithful: bool
+    status: FaithfulnessStatus
+    faithful: bool | None  # None only when status == INVALID_JUDGE_RESPONSE
     reason: str
+
+
+def _parse(response: str) -> tuple[str | None, str]:
+    """Returns (verdict_or_None, reason). verdict is None if not exactly
+    FAITHFUL or UNFAITHFUL on the first line — strict, not startswith,
+    so a malformed first line (extra words, wrong word entirely) is
+    caught explicitly rather than silently defaulting to unfaithful."""
+    lines = response.strip().split("\n", 1)
+    verdict = lines[0].strip().upper()
+    reason = lines[1].strip() if len(lines) > 1 else ""
+
+    if verdict not in ("FAITHFUL", "UNFAITHFUL"):
+        return None, reason
+    return verdict, reason
 
 
 def check_faithfulness(answer: str, chunks: list[RetrievedChunk]) -> FaithfulnessResult:
     context_block = format_chunks_for_prompt(chunks)
     user_prompt = f"ANSWER:\n{answer}\n\n{context_block}"
 
-    for attempt in range(2):  # one retry specifically for a missing/blank reason
+    last_verdict, last_reason = None, ""
+    for attempt in range(2):  # one retry for a malformed verdict or missing reason
         response = chat(FAITHFULNESS_SYSTEM_PROMPT, user_prompt, temperature=0.0)
-        lines = response.strip().split("\n", 1)
-        verdict = lines[0].strip().upper()
-        reason = lines[1].strip() if len(lines) > 1 else ""
+        verdict, reason = _parse(response)
+        last_verdict, last_reason = verdict, reason
 
-        if reason:
-            return FaithfulnessResult(faithful=verdict.startswith("FAITHFUL"), reason=reason)
+        if verdict is not None and reason:
+            return FaithfulnessResult(
+                status=verdict, faithful=(verdict == "FAITHFUL"), reason=reason,
+            )
 
-    # Both attempts came back without a reason - don't silently record an
-    # empty string, which is indistinguishable from "not checked yet" when
-    # reading results.json later. Flag it explicitly instead.
+    # Both attempts failed to produce a valid, explained verdict. This is
+    # NOT recorded as a hallucination — it's recorded as what it is: the
+    # judge itself failing. run_eval.py must surface this separately and
+    # exclude it from the hallucination_rate calculation, not fold it in.
     return FaithfulnessResult(
-        faithful=verdict.startswith("FAITHFUL"),
-        reason="[faithfulness judge gave a verdict but no reason after 2 attempts - "
-               "manually review this row]",
+        status="INVALID_JUDGE_RESPONSE",
+        faithful=None,
+        reason=(
+            f"[faithfulness judge failed to give a valid, explained verdict after "
+            f"2 attempts — last raw verdict line: {last_verdict!r}, reason: "
+            f"{last_reason!r}. Manually review this row; excluded from hallucination_rate.]"
+        ),
     )

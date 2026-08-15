@@ -63,4 +63,11 @@ Rules:
 - If the retrieved content only partially answers the question, say so explicitly and note \
 what's missing rather than filling the gap with assumptions.
 - Be concise and direct.
+- CRITICAL for legal, procedural, or conditional statements (what happens if X, who is \
+excluded, what is required): stick close to the source's actual wording. Do not add your \
+own summarizing conclusion that isn't explicitly stated, even if it seems like a reasonable \
+implication. For example, if the source says "the government will not reimburse an advance \
+payment," do not add an inference like "the applicant's claim is rejected" — state only what \
+the source actually says, even if that makes the answer feel less conclusive. A precise but \
+incomplete-sounding answer is correct; a fluent but inferential one is not.
 """

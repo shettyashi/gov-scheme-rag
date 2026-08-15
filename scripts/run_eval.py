@@ -82,9 +82,11 @@ def run_one(item: dict, conn) -> dict:
 
     if result.answered:
         faith = check_faithfulness(result.answer, chunks)
-        row["faithful"] = faith.faithful
+        row["faithfulness_status"] = faith.status  # FAITHFUL / UNFAITHFUL / INVALID_JUDGE_RESPONSE
+        row["faithful"] = faith.faithful  # True / False / None
         row["faithfulness_reason"] = faith.reason
     else:
+        row["faithfulness_status"] = None
         row["faithful"] = None
         row["faithfulness_reason"] = None
 
@@ -106,8 +108,15 @@ def summarize(rows: list[dict]) -> dict:
     false_refusals = [r for r in scored if not r["actual_answered"] and r["expected_answerable"]]
 
     answered_rows = [r for r in scored if r["actual_answered"]]
-    faithful_rows = [r for r in answered_rows if r["faithful"]]
-    faithfulness_rate = len(faithful_rows) / len(answered_rows) if answered_rows else None
+    invalid_judge_rows = [r for r in answered_rows if r["faithfulness_status"] == "INVALID_JUDGE_RESPONSE"]
+    judged_rows = [r for r in answered_rows if r["faithfulness_status"] in ("FAITHFUL", "UNFAITHFUL")]
+    faithful_rows = [r for r in judged_rows if r["faithful"] is True]
+    # Denominator excludes invalid judge responses on purpose - a judge
+    # that failed to explain itself is neither evidence of faithfulness
+    # nor of hallucination. Counting it either way would misrepresent
+    # what was actually measured. See faithfulness.py for the full
+    # reasoning.
+    faithfulness_rate = len(faithful_rows) / len(judged_rows) if judged_rows else None
     hallucination_rate = (1 - faithfulness_rate) if faithfulness_rate is not None else None
 
     return {
@@ -124,6 +133,8 @@ def summarize(rows: list[dict]) -> dict:
         "answered_count": len(answered_rows),
         "faithfulness_rate": faithfulness_rate,
         "hallucination_rate": hallucination_rate,
+        "invalid_judge_response_count": len(invalid_judge_rows),
+        "invalid_judge_response_ids": [r["id"] for r in invalid_judge_rows],
         "meets_hit_rate_target": (hit_rate >= TARGET_HIT_RATE) if hit_rate is not None else None,
         "meets_hallucination_target": (
             hallucination_rate <= TARGET_HALLUCINATION_RATE
@@ -174,6 +185,11 @@ def main():
     print(f"Hallucination rate:     "
           f"{hal:.1%} {'[MEETS' if summary['meets_hallucination_target'] else '[EXCEEDS'} "
           f"{TARGET_HALLUCINATION_RATE:.0%} target]" if hal is not None else "N/A")
+    if summary["invalid_judge_response_count"] > 0:
+        print(f"  ⚠ INVALID JUDGE RESPONSES: {summary['invalid_judge_response_count']} "
+              f"{summary['invalid_judge_response_ids']} — excluded from hallucination_rate "
+              f"above, but the judge failed to give a valid verdict on these. Review manually "
+              f"before trusting this run's number.")
     print(f"\nFull results written to {RESULTS_PATH}")
 
     # Exit nonzero on target miss so CI (Phase 6) actually fails the
