@@ -120,7 +120,7 @@ caching with permission scoping. These defend against threats that require a
 multi-user, shared-corpus, or third-party-upload system — none of which this project
 is. Building them here would be solving a problem this system doesn't have.
 
-## Known limitations
+## Goals for version2:
 
 - **Latency is not measured or optimized.** The `/ask` endpoint is synchronous, no
   caching, no batching. A reasonable v2 addition, not a v1 claim.
