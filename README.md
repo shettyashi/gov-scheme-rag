@@ -12,7 +12,7 @@ grounded in official documentation. This project builds a pipeline that only ans
 from ingested official PDFs, and measurably refuses rather than guesses when the
 retrieved content doesn't actually support an answer.
 
-## Real results (not targets — measured, on an 30-question held-out eval set)
+## Results (not targets — measured, on an 30-question held-out eval set)
 
 | Metric | Target | Measured |
 |---|---|---|
